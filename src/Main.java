@@ -1,135 +1,78 @@
-// Main.java (진짜 최종 완성본)
+// Main.java (최종본)
 
-import javax.swing.JOptionPane;
-import javax.swing.SwingUtilities;
-import javax.swing.UIManager;
+import javax.swing.*;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
 public class Main {
-
-    private String myNickname;
-    private LoginFrame loginFrame;
-    private MainFrame mainFrame;
+    private String myNickname; private LoginFrame loginFrame; private MainFrame mainFrame;
     private Map<String, PrivateChatFrame> privateChatFrames = new HashMap<>();
-    private Client client;
-    private Map<String, List<ChatMessage>> chatHistories = new HashMap<>();
-
+    private Client client; private Map<String, List<ChatMessage>> chatHistories = new HashMap<>();
     public Main() {
-        this.client = new Client(this);
-        this.loginFrame = new LoginFrame(this);
-        this.loginFrame.setVisible(true);
+        this.client = new Client(this); this.loginFrame = new LoginFrame(this); loginFrame.setVisible(true);
     }
-
     public void attemptLogin(String nickname) {
         if (client.connect(nickname)) {
-            this.myNickname = nickname;
-            loginFrame.dispose();
-            mainFrame = new MainFrame(this);
-            mainFrame.setTitle("겜톡 로비 - " + nickname);
-            mainFrame.setVisible(true);
+            this.myNickname = nickname; loginFrame.dispose(); mainFrame = new MainFrame(this); mainFrame.setVisible(true);
         }
     }
-
-    public void startPrivateChat(String partnerNickname) {
-        if (myNickname.equals(partnerNickname)) return;
-
-        PrivateChatFrame frame = privateChatFrames.get(partnerNickname);
-        if (frame != null) {
-            frame.toFront();
-        } else {
-            PrivateChatFrame newChatFrame = new PrivateChatFrame(this, partnerNickname);
-            privateChatFrames.put(partnerNickname, newChatFrame);
-
-            List<ChatMessage> history = chatHistories.get(partnerNickname);
-            if (history != null) {
-                for (ChatMessage msg : history) {
-                    newChatFrame.addChatMessage(msg);
-                }
-            }
+    public void startPrivateChat(String partner) {
+        if (myNickname.equals(partner)) return;
+        privateChatFrames.computeIfAbsent(partner, p -> {
+            PrivateChatFrame newChatFrame = new PrivateChatFrame(this, p);
+            List<ChatMessage> history = chatHistories.get(p);
+            if (history != null) history.forEach(newChatFrame::addChatMessage);
             newChatFrame.setVisible(true);
-        }
+            return newChatFrame;
+        }).toFront();
     }
-
-    public void closePrivateChat(String partnerNickname) {
-        privateChatFrames.remove(partnerNickname);
-        System.out.println(partnerNickname + "님과의 채팅창을 닫았습니다.");
-    }
-
+    public void closePrivateChat(String partner) { privateChatFrames.remove(partner); }
     public void handleServerMessage(String message) {
         SwingUtilities.invokeLater(() -> {
+            if (mainFrame == null && !message.startsWith("LOGIN_FAIL")) return;
             String[] parts = message.split("::", 2);
-            String command = parts[0];
-            String data = parts.length > 1 ? parts[1] : "";
-
+            String command = parts[0]; String data = parts.length > 1 ? parts[1] : "";
             switch (command) {
-                case "USER_LIST":
-                case "NEW_USER":
-                case "EXIT_USER":
-                    if (mainFrame != null) mainFrame.processServerMessage(message);
+                case "GAME_START_SUCCESS": mainFrame.showGame(); break;
+                case "GAME_INFO":
+                    mainFrame.getGamePanel().setInfoText(data);
+                    mainFrame.getGamePanel().setInputEnabled(data.contains(myNickname + "님의 차례입니다"));
                     break;
+                case "GAME_BOARD_UPDATE": mainFrame.getGamePanel().updateHistory(data); break;
+                case "GAME_END":
+                    mainFrame.getGamePanel().setInfoText("게임 종료! 승자: " + data);
+                    mainFrame.getGamePanel().setInputEnabled(false);
+                    JOptionPane.showMessageDialog(mainFrame, "게임 종료!\n승자: " + data, "게임 종료", JOptionPane.INFORMATION_MESSAGE);
+                    mainFrame.showChat();
+                    break;
+                case "USER_LIST": case "NEW_USER": case "EXIT_USER": mainFrame.processServerMessage(message); break;
                 case "PUBLIC_MSG":
-                    String[] msgParts = data.split("::", 2);
-                    String publicSender = msgParts[0];
-                    String publicMsg = msgParts[1];
-                    ChatMessage publicChatMessage = new ChatMessage(publicSender, publicMsg, publicSender.equals(myNickname));
-                    chatHistories.computeIfAbsent("전체", k -> new ArrayList<>()).add(publicChatMessage);
-                    if (mainFrame != null) mainFrame.addChatMessage(publicChatMessage);
+                    String[] msgP = data.split("::", 2);
+                    ChatMessage pubMsg = new ChatMessage(msgP[0], msgP[1], msgP[0].equals(myNickname));
+                    chatHistories.computeIfAbsent("전체", k -> new ArrayList<>()).add(pubMsg);
+                    mainFrame.addChatMessage(pubMsg);
                     break;
                 case "PRIVATE_MSG":
-                    // ▼▼▼ [핵심 버그 수정] 1:1 메시지 처리 로직 완벽 수정 ▼▼▼
-                    String[] pmParts = data.split("::", 3);
-                    String sender = pmParts[0];
-                    String receiver = pmParts[1];
-                    String pm = pmParts[2];
-
-                    // 이 대화가 나와 관련된 대화인지 확인 (내가 보냈거나, 내가 받았거나)
+                    String[] pmP = data.split("::", 3);
+                    String sender = pmP[0], receiver = pmP[1], pm = pmP[2];
                     if (sender.equals(myNickname) || receiver.equals(myNickname)) {
-                        // 대화 상대방 닉네임 찾기 (내가 아니면 무조건 상대방)
-                        String chatPartner = sender.equals(myNickname) ? receiver : sender;
-
-                        // isMine 플래그를 정확하게 설정
-                        boolean isMine = sender.equals(myNickname);
-
-                        ChatMessage privateChatMessage = new ChatMessage(sender, pm, isMine);
-
-                        // 대화 기록 저장
-                        chatHistories.computeIfAbsent(chatPartner, k -> new ArrayList<>()).add(privateChatMessage);
-
-                        // 해당 채팅창이 열려있는지 확인
-                        PrivateChatFrame targetFrame = privateChatFrames.get(chatPartner);
-
-                        if (targetFrame != null) {
-                            // 열려있으면 메시지 표시
-                            targetFrame.addChatMessage(privateChatMessage);
-                        } else {
-                            // 안 열려있으면, 내가 보낸 메시지가 아닐 때만 새로 열어줌
-                            if (!isMine) {
-                                startPrivateChat(chatPartner);
-                            }
-                        }
+                        String partner = sender.equals(myNickname) ? receiver : sender;
+                        ChatMessage prvMsg = new ChatMessage(sender, pm, sender.equals(myNickname));
+                        chatHistories.computeIfAbsent(partner, k -> new ArrayList<>()).add(prvMsg);
+                        PrivateChatFrame targetFrame = privateChatFrames.get(partner);
+                        if (targetFrame != null) targetFrame.addChatMessage(prvMsg);
+                        else if (!sender.equals(myNickname)) { mainFrame.showNotificationFor(partner); startPrivateChat(partner); }
                     }
                     break;
-                case "LOGIN_FAIL":
-                    loginFailed(data);
-                    break;
-                case "SERVER_DOWN":
-                    JOptionPane.showMessageDialog(null, "서버와의 연결이 끊어졌습니다.", "연결 오류", JOptionPane.ERROR_MESSAGE);
-                    System.exit(0);
-                    break;
+                case "LOGIN_FAIL": loginFailed(data); break;
+                case "SERVER_DOWN": JOptionPane.showMessageDialog(null, "서버 연결 끊김.", "연결 오류", JOptionPane.ERROR_MESSAGE); System.exit(0); break;
             }
         });
     }
-
     public void loginFailed(String reason) { JOptionPane.showMessageDialog(loginFrame, reason, "로그인 실패", JOptionPane.ERROR_MESSAGE); }
     public Client getClient() { return client; }
     public String getMyNickname() { return myNickname; }
-
-    public static void main(String[] args) {
-        try { UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName()); }
-        catch (Exception e) { e.printStackTrace(); }
-        SwingUtilities.invokeLater(Main::new);
-    }
+    public static void main(String[] args) { try { UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName()); } catch (Exception e) {} SwingUtilities.invokeLater(Main::new); }
 }
